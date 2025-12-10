@@ -11,8 +11,8 @@
 // @grant        GM_getValue
 // @connect      api.torn.com
 // @homepageURL  https://github.com/qaimali7-web/Racing-Skill-Display-New
-// @updateURL    https://raw.githubusercontent.com/qaimali7-web/Racing-Skill-Display-New/main/racing_skill.user.js
-// @downloadURL  https://raw.githubusercontent.com/qaimali7-web/Racing-Skill-Display-New/main/racing_skill.user.js
+// @updateURL    https://raw.githubusercontent.com/qaimali7-web/Racing-Skill-Display-New/main/racing_skill.js
+// @downloadURL  https://raw.githubusercontent.com/qaimali7-web/Racing-Skill-Display-New/main/racing_skill.js
 // ==/UserScript==
 
 (function() {
