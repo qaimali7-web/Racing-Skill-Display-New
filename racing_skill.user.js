@@ -19,46 +19,33 @@
     'use strict';
 
     const API_KEY_STORAGE = 'torn_racing_api_key';
-    let userCancelled = false; // Flag to prevent spamming prompts if user cancels
+    const POS_TOP_STORAGE = 'torn_racing_pos_top';
+    const POS_LEFT_STORAGE = 'torn_racing_pos_left';
+    let userCancelled = false;
 
-    // Helper to get API Key
+    // --- API & Auth Logic ---
     function getApiKey() {
         let key = GM_getValue(API_KEY_STORAGE);
+        if (key && key.length === 16) return key;
+        if (userCancelled) return null;
 
-        // 1. If we already have a valid key saved, return it.
-        if (key && key.length === 16) {
-            return key;
-        }
-
-        // 2. If the user already clicked 'Cancel' this session, do not ask again.
-        if (userCancelled) {
-            return null;
-        }
-
-        // 3. Prompt the user
         key = prompt("Please enter your Torn Public API Key (16 characters) to see your Racing Skill:");
 
-        // 4. Handle User Actions
         if (key === null) {
-            // User clicked "Cancel"
-            console.log("Racing Skill: User cancelled API prompt. Will not ask again this session.");
             userCancelled = true;
             return null;
         }
 
         if (key.length === 16) {
-            // User entered a valid-length key
             GM_setValue(API_KEY_STORAGE, key);
             return key;
         } else {
-            // User entered invalid data
             alert("Invalid API Key length. Script paused for this session.");
-            userCancelled = true; // Stop asking to prevent alert loops
+            userCancelled = true;
             return null;
         }
     }
 
-    // Helper to fetch Racing Skill from Torn API
     function fetchRacingSkill(key) {
         const url = `https://api.torn.com/user/?selections=personalstats&key=${key}`;
 
@@ -70,19 +57,14 @@
                     const data = JSON.parse(response.responseText);
                     if (data.error) {
                         console.error("Torn API Error:", data.error.error);
-                        // If key is invalid (code 2), clear it so user can re-enter NEXT time (but not immediately to avoid loop)
                         if (data.error.code === 2) {
                              GM_setValue(API_KEY_STORAGE, '');
-                             alert("API Key invalid or expired. Please refresh to try again.");
-                             userCancelled = true; // Stop trying for now
+                             alert("API Key invalid or expired. Please refresh.");
+                             userCancelled = true;
                         }
                         return;
                     }
-
-                    // Extract Racing Skill
-                    const rs = data.personalstats.racingskill;
-                    displayRacingSkill(rs);
-
+                    displayRacingSkill(data.personalstats.racingskill);
                 } catch (e) {
                     console.error("Error parsing Torn API response", e);
                 }
@@ -90,74 +72,98 @@
         });
     }
 
-    // Helper to inject HTML into the page
+    // --- Drag & Drop Logic ---
+    function makeDraggable(element) {
+        let isDragging = false;
+        let startX, startY, initialLeft, initialTop;
+
+        element.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            startX = e.clientX;
+            startY = e.clientY;
+            initialLeft = element.offsetLeft;
+            initialTop = element.offsetTop;
+            element.style.cursor = 'grabbing';
+            e.preventDefault(); // Prevent text selection
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            element.style.left = `${initialLeft + dx}px`;
+            element.style.top = `${initialTop + dy}px`;
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                element.style.cursor = 'move';
+                // Save the new position
+                GM_setValue(POS_LEFT_STORAGE, element.style.left);
+                GM_setValue(POS_TOP_STORAGE, element.style.top);
+            }
+        });
+    }
+
+    // --- Display Logic ---
     function displayRacingSkill(skill) {
-        // Prevent duplicate boxes
         if (document.getElementById('rs-display-box')) return;
 
-        // Try to find the racing header
-        const target = document.querySelector('.content-title') || document.querySelector('.racing-main-wrap');
+        const target = document.querySelector('.racing-main-wrap');
 
         if (target) {
-            // Ensure parent allows for absolute positioning of child
             if(getComputedStyle(target).position === 'static') {
                 target.style.position = 'relative';
             }
 
             const displayDiv = document.createElement('div');
             displayDiv.id = 'rs-display-box';
-            
-            // Centered CSS
+
+            // Load saved position or use defaults (Under the "3.20" graphic)
+            const savedTop = GM_getValue(POS_TOP_STORAGE, '95px');
+            const savedLeft = GM_getValue(POS_LEFT_STORAGE, '26px');
+
             displayDiv.style.cssText = `
                 position: absolute;
-                left: 50%;
-                transform: translateX(-50%);
-                top: 7px;
-                background: #333;
+                top: ${savedTop};
+                left: ${savedLeft};
+                background: rgba(0, 0, 0, 0.85);
                 color: #fff;
-                padding: 4px 12px;
-                border-radius: 5px;
+                padding: 4px 10px;
+                border-radius: 4px;
                 font-weight: bold;
-                border: 1px solid #555;
+                border: 1px solid #444;
                 z-index: 9999;
-                box-shadow: 0 0 5px rgba(0,0,0,0.5);
-                font-size: 14px;
+                font-size: 13px;
+                cursor: move; /* Indicates draggable */
+                user-select: none; /* Makes dragging smoother */
+                box-shadow: 0 2px 5px rgba(0,0,0,0.5);
             `;
-            
+
             displayDiv.innerHTML = `🏁 RS: <span style="color: #00ff00;">${parseFloat(skill).toFixed(2)}</span>`;
 
-            // Insert into DOM
-            if (target.classList.contains('content-title')) {
-                 target.appendChild(displayDiv);
-            } else {
-                 target.parentNode.insertBefore(displayDiv, target);
-            }
+            target.appendChild(displayDiv);
+
+            // Enable Dragging
+            makeDraggable(displayDiv);
         }
     }
 
-    // Main Execution Function
+    // --- Init ---
     function init() {
-        // If we already cancelled, don't run init logic
         if (userCancelled) return;
-
         const key = getApiKey();
-        if (key) {
-            fetchRacingSkill(key);
-        }
+        if (key) fetchRacingSkill(key);
     }
 
-    // Observer to handle Torn's dynamic page loading
     const observer = new MutationObserver((mutations) => {
-        // Optimization: If user cancelled, stop checking DOM to save performance
         if (userCancelled) return;
-
-        // Check if we are on the racing page and the box isn't there yet
         if (document.querySelector('.racing-main-wrap') && !document.getElementById('rs-display-box')) {
             init();
         }
     });
 
-    // Start observing
     observer.observe(document.body, { childList: true, subtree: true });
 
 })();
