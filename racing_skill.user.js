@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Racing Skill Display New
 // @namespace    https://github.com/qaimali7-web
-// @version      2.3
+// @version      2.0
 // @description  Shows your own Racing Skill on the racing page using the Torn API.
 // @author       Qaim [2370947]
 // @match        https://www.torn.com/page.php?sid=racing*
