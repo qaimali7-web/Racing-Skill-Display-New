@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Racing Skill Display New
+// @name         Racing Skill Display
 // @namespace    https://github.com/qaimali7-web
 // @version      2.0
 // @description  Shows your own Racing Skill on the racing page using the Torn API.
