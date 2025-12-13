@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Racing Skill Display Ultimate
 // @namespace    https://github.com/qaimali7-web
-// @version      2.1
-// @description  Auto-prompts for API key once on load. Shows RS from page, RP from API.
+// @version      2.2
+// @description  A draggable overlay displaying accurate Racing Skill, Points.
 // @author       Qaim
 // @match        https://www.torn.com/page.php?sid=racing*
 // @match        https://www.torn.com/loader.php?sid=racing*
@@ -21,27 +21,57 @@
     const API_KEY_STORAGE = 'torn_racing_api_key';
     const POS_TOP_STORAGE = 'torn_racing_pos_top';
     const POS_LEFT_STORAGE = 'torn_racing_pos_left';
-    
-    // Flag to ensure we only prompt once per page load
+
     let hasPrompted = false;
+    
+    // Global State
+    let globalState = {
+        rs: '...',       
+        rp: '...',       
+        tp: '...',       
+        needed: '...',   
+        targetClass: '...' 
+    };
 
-    // --- 1. HELPER: Calculate Next Class Requirements ---
-    function getPointsNextClass(currentPoints) {
-        const pts = parseInt(currentPoints, 10);
-        if (isNaN(pts)) return '?';
+    // --- 1. LOGIC: Next Class Calculation ---
+    function updateClassData(totalEarned) {
+        const pts = parseInt(totalEarned, 10);
+        if (isNaN(pts)) {
+            globalState.needed = '?';
+            globalState.targetClass = '?';
+            return;
+        }
 
-        if (pts < 25) return `+${25 - pts} (D)`;   // Aiming for Class D
-        if (pts < 100) return `+${100 - pts} (C)`; // Aiming for Class C
-        if (pts < 250) return `+${250 - pts} (B)`; // Aiming for Class B
-        if (pts < 475) return `+${475 - pts} (A)`; // Aiming for Class A
-        return 'Max'; // Already Class A
+        if (pts < 25) {
+            globalState.needed = 25 - pts;
+            globalState.targetClass = 'Class D';
+        } else if (pts < 100) {
+            globalState.needed = 100 - pts;
+            globalState.targetClass = 'Class C';
+        } else if (pts < 250) {
+            globalState.needed = 250 - pts;
+            globalState.targetClass = 'Class B';
+        } else if (pts < 475) {
+            globalState.needed = 475 - pts;
+            globalState.targetClass = 'Class A';
+        } else {
+            globalState.needed = 0;
+            globalState.targetClass = 'Max';
+        }
     }
 
-    // --- 2. DOM SCRAPER: Get Racing Skill Only ---
+    // --- 2. SCRAPERS ---
+    function getRpFromFooter() {
+        // Scans specifically for "You have X racing points available"
+        const bodyText = document.body.innerText || ""; 
+        const match = bodyText.match(/You have\s+(\d+)\s+racing points/i);
+        if (match && match[1]) return match[1];
+        return null;
+    }
+
     function getSkillFromPage() {
         const labels = Array.from(document.querySelectorAll('.skill-desc'));
         const targetLabel = labels.find(el => el.textContent.trim() === 'RACING SKILL');
-
         if (targetLabel && targetLabel.nextElementSibling && targetLabel.nextElementSibling.classList.contains('skill')) {
             return targetLabel.nextElementSibling.textContent.trim();
         }
@@ -56,18 +86,15 @@
     }
 
     function promptForKey() {
-        // Prevent multiple prompts
         if (hasPrompted) return;
         hasPrompted = true;
 
         let key = prompt("Enter Torn Public API Key (16 chars):");
-        
         if (key !== null && key.length === 16) {
             GM_setValue(API_KEY_STORAGE, key);
             alert("API Key saved. Refreshing page...");
             location.reload();
         } else if (key === null) {
-            // User cancelled - Show the bar text instead
             displayBox("Enter Public API key (Click to Fix)", true);
         } else {
             alert("Invalid Key length.");
@@ -75,7 +102,7 @@
         }
     }
 
-    function fetchAndDisplayData(key) {
+    function fetchApiData(key) {
         const url = `https://api.torn.com/user/?selections=personalstats&key=${key}&time=${Date.now()}`;
         
         GM_xmlhttpRequest({
@@ -84,33 +111,58 @@
             onload: function(response) {
                 try {
                     const data = JSON.parse(response.responseText);
-                    
                     if (data.error && data.error.code === 2) {
-                        GM_setValue(API_KEY_STORAGE, ''); // Clear invalid key
+                        GM_setValue(API_KEY_STORAGE, '');
                         displayBox("Invalid Key. Click to fix.", true);
                         return;
                     } 
-                    
                     if (data.personalstats) {
-                        const rp = data.personalstats.racingpoints || 0;
-                        
-                        // Prefer Page Skill, fallback to API Skill
-                        const pageSkill = getSkillFromPage();
-                        const apiSkill = parseFloat(data.personalstats.racingskill).toFixed(2);
-                        const finalSkill = pageSkill ? pageSkill : apiSkill;
+                        // 1. Total Points & Class Logic
+                        const totalEarned = data.personalstats.racingpointsearned;
+                        if (totalEarned !== undefined) {
+                            globalState.tp = totalEarned;
+                            updateClassData(totalEarned);
+                        }
 
-                        updateDisplay(finalSkill, rp);
+                        // 2. Skill (Backup if page read fails)
+                        globalState.rs = parseFloat(data.personalstats.racingskill).toFixed(2);
+                        
+                        // 3. Current RP (Backup ONLY if footer not found)
+                        if (globalState.rp === '...') {
+                            globalState.rp = data.personalstats.racingpoints || 0;
+                        }
+                        
+                        refreshDisplay();
                     }
                 } catch (e) { console.error(e); }
             }
         });
     }
 
-    // --- 4. UI: DRAG & DROP ---
+    // --- 4. CONTINUOUS CHECK LOOP ---
+    function refreshDisplay() {
+        renderBox(globalState);
+    }
+
+    function scanDomUpdates() {
+        // Priority 1: Visual Racing Skill
+        const pageSkill = getSkillFromPage();
+        if (pageSkill) globalState.rs = pageSkill;
+
+        // Priority 2: Footer Authority for Racing Points
+        // If found, this overrides any API data immediately
+        const footerRp = getRpFromFooter();
+        if (footerRp) {
+            globalState.rp = footerRp; 
+        }
+        
+        refreshDisplay();
+    }
+
+    // --- 5. UI RENDERER ---
     function makeDraggable(element) {
         let isDragging = false;
         let startX, startY, initialLeft, initialTop;
-
         const onStart = (clientX, clientY) => {
             isDragging = true;
             startX = clientX;
@@ -119,13 +171,11 @@
             initialTop = element.offsetTop;
             element.style.cursor = 'grabbing';
         };
-
         const onMove = (clientX, clientY) => {
             if (!isDragging) return;
             element.style.left = `${initialLeft + (clientX - startX)}px`;
             element.style.top = `${initialTop + (clientY - startY)}px`;
         };
-
         const onEnd = () => {
             if (isDragging) {
                 isDragging = false;
@@ -134,50 +184,48 @@
                 GM_setValue(POS_TOP_STORAGE, element.style.top);
             }
         };
-
         element.addEventListener('mousedown', (e) => {
             if(e.target.tagName !== 'SPAN' || e.target.id !== 'enter-key-btn') {
-                onStart(e.clientX, e.clientY);
-                e.preventDefault();
+                onStart(e.clientX, e.clientY); e.preventDefault();
             }
         });
         window.addEventListener('mousemove', (e) => onMove(e.clientX, e.clientY));
         window.addEventListener('mouseup', onEnd);
-
         element.addEventListener('touchstart', (e) => {
             if(e.target.tagName !== 'SPAN' || e.target.id !== 'enter-key-btn') {
-                const touch = e.touches[0];
-                onStart(touch.clientX, touch.clientY);
-                e.preventDefault();
+                const touch = e.touches[0]; onStart(touch.clientX, touch.clientY); e.preventDefault();
             }
         }, { passive: false });
         window.addEventListener('touchmove', (e) => {
             if (e.cancelable) e.preventDefault();
-            const touch = e.touches[0];
-            onMove(touch.clientX, touch.clientY);
+            const touch = e.touches[0]; onMove(touch.clientX, touch.clientY);
         }, { passive: false });
         window.addEventListener('touchend', onEnd);
     }
 
-    // --- 5. UI: DISPLAY BOX ---
-    function updateDisplay(rs, rp) {
-        const nextClassText = getPointsNextClass(rp);
+    function renderBox(state) {
         const html = `
-            🏁 RS: <span style="color:#00ff00;">${rs}</span> 
-            <span style="color:#888;">|</span> 
-            RP: <span style="color:#00ccff;">${rp}</span> 
-            <span style="font-size: 0.9em; color:#ffff00;">(${nextClassText})</span>
+            <div style="margin-bottom: 2px;">
+                🏁 RS: <span style="color:#00ff00;">${state.rs}</span> 
+                <span style="color:#666;">|</span> 
+                RP: <span style="color:#00ccff;">${state.rp}</span>
+                <span style="color:#666;">|</span> 
+                TP: <span style="color:#ff66ff;">${state.tp}</span>
+            </div>
+            <div style="font-size: 0.9em; border-top: 1px solid #444; padding-top: 2px; color:#ddd;">
+                RP Needed: <span style="color:#ff3333;">${state.needed}</span> 
+                <span style="color:#666;">|</span> 
+                Next Class: <span style="color:#ffd700;">${state.targetClass}</span>
+            </div>
         `;
         displayBox(html, false);
     }
 
     function displayBox(contentHtml, isClickableSetup) {
         let box = document.getElementById('rs-display-box');
-
         if (!box) {
             const target = document.querySelector('.racing-main-wrap');
             if (!target) return;
-
             if (getComputedStyle(target).position === 'static') target.style.position = 'relative';
 
             box = document.createElement('div');
@@ -186,9 +234,9 @@
                 position: absolute;
                 top: ${GM_getValue(POS_TOP_STORAGE, '95px')};
                 left: ${GM_getValue(POS_LEFT_STORAGE, '26px')};
-                background: rgba(0, 0, 0, 0.9);
+                background: rgba(0, 0, 0, 0.92);
                 color: #fff;
-                padding: 6px 10px;
+                padding: 8px 10px;
                 border-radius: 6px;
                 font-weight: bold;
                 border: 1px solid #555;
@@ -199,21 +247,19 @@
                 touch-action: none;
                 white-space: nowrap;
                 font-family: Arial, sans-serif;
+                line-height: 1.4;
+                text-align: left;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.5);
             `;
             target.appendChild(box);
             makeDraggable(box);
         }
-
+        
         if (isClickableSetup) {
             box.innerHTML = `<span id="enter-key-btn" style="color: #ff9900; cursor: pointer; text-decoration: underline;">${contentHtml}</span>`;
             const btn = document.getElementById('enter-key-btn');
             if(btn) {
-                // Clicking the text triggers the prompt again manually
-                btn.onclick = function(e) { 
-                    e.stopPropagation(); 
-                    hasPrompted = false; // Reset so prompt can appear again
-                    promptForKey(); 
-                };
+                btn.onclick = function(e) { e.stopPropagation(); hasPrompted = false; promptForKey(); };
                 btn.ontouchstart = function(e) { e.stopPropagation(); }
             }
         } else {
@@ -221,22 +267,24 @@
         }
     }
 
-    // --- 6. MAIN LOOP ---
+    // --- 6. INITIALIZATION ---
     const observer = new MutationObserver(() => {
-        if (document.querySelector('.racing-main-wrap') && !document.getElementById('rs-display-box')) {
-            
-            const key = getStoredApiKey();
-            
-            if (key) {
-                // Has key -> Run Logic
-                fetchAndDisplayData(key);
-            } else {
-                // No Key -> Prompt ONCE
-                if (!hasPrompted) {
-                    promptForKey();
+        if (document.querySelector('.racing-main-wrap')) {
+            if (!document.getElementById('rs-display-box')) {
+                const key = getStoredApiKey();
+                if (key) {
+                    fetchApiData(key);
+                    
+                    // Continuous Check: Runs every 1s for 10s to catch delayed footer loading
+                    let checks = 0;
+                    const interval = setInterval(() => {
+                        scanDomUpdates();
+                        checks++;
+                        if (checks > 10) clearInterval(interval);
+                    }, 1000);
                 } else {
-                    // Already prompted and cancelled? Show button.
-                    displayBox("Enter Public API key (Click to Fix)", true);
+                    if (!hasPrompted) promptForKey();
+                    else displayBox("Enter Public API key (Click to Fix)", true);
                 }
             }
         }
